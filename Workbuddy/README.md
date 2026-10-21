@@ -3,7 +3,7 @@
 > 适用版本：WorkBuddy 5.7.6（腾讯 CodeBuddy 系 Electron 应用）
 > 脚本位置：`~/.workbuddy/wb-switch.sh`（本目录为其备份副本）
 > 图形界面：本目录 `index.html` + `server.py`（见「图形界面」章节）
-> 成长任务自动化：本目录 `growth.py`（见「成长中心自动化」章节）
+> 成长任务自动化：本目录 `wb_growth.py` + `desktop.py`（见「成长中心自动化」章节）
 
 ## 一、原理概述
 
@@ -88,7 +88,7 @@ JSON 结构为 `{account, auth, accounts, allAccounts}`：
 
 1. **快照即凭据**：每个 `.info` 快照含有效 refresh token，等同于明文密码文件，**切勿放入网盘 / 代码仓库**。FileVault 磁盘加密 + 0600 权限是基本保障。
 2. **30 天过期**：长期不登录的账号 refresh token 会失效，定期 `switch` 过去一次再切回来即可续期。
-3. **热加载待实测**：热加载行为是从代码（`file-authentication-storage.js` 的 watcher/reconcile 逻辑）推导的，未在登录态下实测，故保留 `restart` 兜底命令，实测一次即可确认。
+3. **热加载已实测**：外部替换会话文件后，应用通常 1~2 秒内自动生效，无需重启；个别情况未生效时用 `wb-switch.sh restart` 兜底。
 4. **合规提示**：本方案为自己机器上的自有账号设计；若账号属企业管控，频繁换号是否合规以相关规定为准。
 
 ## 五、文件清单
@@ -98,9 +98,11 @@ JSON 结构为 `{account, auth, accounts, allAccounts}`：
 | `wb-switch.sh` | `~/.workbuddy/`（本目录有副本） | 切号脚本（核心逻辑） |
 | `server.py` | 本目录 | 图形界面本地桥接服务 |
 | `index.html` | 本目录 | 图形界面页面 |
-| `growth.py` | 本目录 | 成长中心自动化（网页会话通道） |
+| `wb_checkin.py` | 本目录 | wbipc 签到客户端（应用进程代领每日积分） |
+| `wb_growth.py` | 本目录 | 成长任务自动化（wbipc + CDP 双通道，控制台调用） |
 | `desktop.py` | 本目录 | 桌面端 CDP 自动化（成长任务） |
-| `wb_import.py` | 本目录 | 登录凭证导入 + token 直连签到（见「九」） |
+| `growth.py` | 本目录 | 旧版成长中心自动化（浏览器会话通道） |
+| `wb_import.py` | 本目录 | 登录凭证导入 + token 直连签到（见「八」） |
 | 会话快照 | `~/.workbuddy/account-switcher-snapshots/` | 各账号 `.info` 快照 |
 | token 账号池 | `~/.workbuddy/token-accounts.json` | 导入的直连账号凭证（0600） |
 | 会话文件 | `~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info` | 当前生效会话 |
@@ -141,52 +143,50 @@ python3 server.py --port 9000 --no-open   # 自定义端口 / 不自动打开
 - 所有写操作均带确认弹窗；切换前脚本仍会自动回存当前账号
 - 界面只是脚本的前端，逻辑以 `wb-switch.sh` 为唯一真相源
 
-## 八、成长中心自动化（growth.py）
+## 七、成长中心自动化（wb_growth.py）
 
-自动化完成 [成长中心](https://www.workbuddy.cn/profile/growth-center) 的任务：接受任务、领取积分/能量奖励、兑换连续登录奖励、抽奖、开 Buddy 盲盒，并实时查看任务进度。
+自动化完成 [成长中心](https://www.workbuddy.cn/profile/growth-center) 的任务：查看进度、接受任务、领取积分/能量、连续登录兑换、抽奖，以及通过桌面端 UI 完成聊天/专家/灵感等真实使用任务。
 
-### 原理
+### 两条执行通道
 
-- 成长中心全部走 `www.workbuddy.cn` 站内 HTTP API（`/v2/activity/growth/*`），与官网前端调用完全一致；
-- 工具用 Playwright 驱动一个**专用 Chrome 持久会话**（`~/.workbuddy/growth-profile`），在轻量同源页内以官方前端相同方式 fetch，登录态保存在本地浏览器 profile，凭据不导出；
-- **必须以有头模式运行**（窗口自动移到屏幕外）：workbuddy.cn 的 WAF 在 TLS/HTTP2 指纹层面识别无头浏览器，无头请求会被 401 并清除 session；
-- 会话自愈：登录态意外失效时自动从 `~/.workbuddy/growth-session.json`（Cookie 引导文件，权限 600）重导入。
+| 通道 | 机制 | 适用任务 |
+|---|---|---|
+| wbipc 轻量通道 | 经 `wb_checkin.py` 的 wbipc 客户端，让应用进程用当前会话调官方成长 API（`/v2/activity/growth/*`） | 任务列表、接受、领奖、兑换、抽奖（秒级） |
+| 桌面端 CDP 通道 | Playwright 连接以 `--remote-debugging-port=9223` 运行的应用，驱动真实 UI | 聊天、召唤专家/专家团、灵感、资料库等（服务端按真实行为计数） |
+
+CDP 任务需要应用带调试端口运行，会重启一次 WorkBuddy（期间请勿使用该应用）。
 
 ### 用法
 
 ```bash
-# 首次使用:两种登录方式任选
-python3 growth.py login                       # 打开浏览器窗口扫码/手机号登录
-python3 growth.py login --cookies cookies.json  # 或导入 Cookie-Editor 插件导出的 JSON
-
-# 日常使用
-python3 growth.py status      # 查看任务列表/进度/能量/等级
-python3 growth.py run         # 一键:接受任务 → 领奖 → 兑换连续登录 → 抽奖
-python3 growth.py run --gacha # 同上,外加能量开 Buddy 盲盒
-python3 growth.py claim       # 只领奖
-python3 growth.py redeem      # 只兑换连续登录奖励(7/14/28 天档)
+python3 wb_growth.py status                 # 任务概览（task_code / 类型 / 进度）
+python3 wb_growth.py run chat_5 expert_5    # 执行指定任务并领奖（CLI 前台）
+python3 desktop.py ensure                   # CDP 任务：确保应用带调试端口运行
+python3 desktop.py run                      # CDP 通道：尽可能完成全部任务并领奖
 ```
 
-### 任务完成机制说明
+`manual` 类型任务（关注公众号、连接器授权等）需人工完成；产品使用类任务也可直接在 WorkBuddy 正常使用，完成后运行工具领奖。
 
-任务进度由**服务端统计真实产品使用**得出（聊天/画布/专家/技能/模板等均为 WorkBuddy 客户端内的真实操作）：
+### 与控制台(app)集成
 
-- 工具负责：接受任务（接受后使用才会计数）、自动领奖、连续登录兑换、抽奖、盲盒；
-- 产品体验类任务（和 AI 聊天 5 次、创建画布、召唤专家等）：在 WorkBuddy 客户端正常使用即自然累计，完成后运行 `run` 自动领奖;
-- `run --try-chat`（实验）：尝试纯 API 发起真实对话（产品会话 API + ACP 协议）。云沙盒受服务端配额限制可能无法启动，失败属预期。
+卡片上的「成长任务」按钮打开任务列表，勾选后后台执行并实时展示进度；wbipc 任务秒级完成，CDP 任务会先确保调试端口，必要时重启应用并自动热加载回当前快照账号。
 
 ### 依赖
 
 ```bash
-pip install playwright requests   # 系统需装有 Google Chrome
+pip install playwright requests   # 仅 CDP 通道需要；系统需装有 Google Chrome
 ```
+
+### 旧版脚本
+
+`growth.py` 为初版浏览器会话通道（Playwright + Cookie 引导文件），仍可独立使用；日常成长任务建议用 `wb_growth.py`（无需浏览器登录态）。
 
 ### 安全设计
 
-- 登录态仅存于本地浏览器 profile 与 Cookie 引导文件（0600），不上传、不打印；
-- 所有操作均为用户自有账号的站内官方 API，与网页端行为一致。
+- 登录态仅通过应用自身 wbipc 通道使用，不导出 token；
+- 所有操作均为用户自有账号的站内官方 API 或本地 UI 自动化。
 
-## 九、登录凭证导入与直连签到（wb_import.py）
+## 八、登录凭证导入与直连签到（wb_import.py）
 
 把外部工具导出的 WorkBuddy 登录凭证 JSON（含 access/refresh token）导入为**token 直连账号**，
 签到时直接调用 `www.workbuddy.cn` 官方 API 领取每日积分——**不切换、不重启桌面应用**，
@@ -220,6 +220,8 @@ uid/昵称/手机号缺失时自动从 JWT claims（`sub`/`preferred_username`�
 - 凭据存 `~/.workbuddy/token-accounts.json`（0600），不上传、不打印；
 - token 过期（401）时自动用 refresh_token 经 `<iss>/protocol/openid-connect/token` 续期并落盘
   （刷新会轮换 refresh_token，故**同一账号不要既导入直连又做桌面快照切换**——桌面 daemon 的刷新会使导入副本失效）；
+- **导入账号仅用于 API 直连签到，不能作为桌面登录态切换**：桌面会话文件中的 token 为应用加密信封，无法由明文凭证合成。
+  如需在桌面端使用该账号，请先在应用内手动登录一次，再点「+ 添加账号」保存为快照；
 - 签到积分为账号自有权益，合规性以平台用户协议为准。
 
 ### 与控制台(app)集成
@@ -227,7 +229,7 @@ uid/昵称/手机号缺失时自动从 JWT claims（`sub`/`preferred_username`�
 签到中心 WorkBuddy 卡片的「⬆ 导入 JSON」按钮即调用本脚本：导入的账号以紫色虚线 chip 展示，
 「全部签到」与每日自动签到均覆盖这些账号（API 直连，秒级）。
 
-## 十、分析方式说明
+## 九、分析方式说明
 
 - 用 REA 挂载 DMG 确认 Electron 结构并完成文件清单
 - ASAR 全量解析因某文件触发解析器崩溃，改用 `@electron/asar` 解包 + 直接读源码

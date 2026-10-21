@@ -75,6 +75,9 @@ cd desktop && npm install && ACCOUNTTOOLS_DEV=1 npm start
 
 适配器约定详见 `app/agents/base.py` 的 docstring。
 
+新增或修改 POST 接口时，Pydantic 请求模型必须定义在**模块级**：本文件启用了
+`from __future__ import annotations`，函数内定义的模型注解无法解析，会导致请求全部 422。
+
 ## 功能一览
 
 | 功能 | 说明 |
@@ -138,6 +141,9 @@ AccountTools/
   WorkBuddy 支持热加载，秒级完成。
 - **不要在 Trae 会话内操作 Trae 签到**：Agent 本身跑在 Trae 里时应用无法退出（签到会安全中止）。
 - **WorkBuddy 签到要求应用在运行**（wbipc 通道依赖之）：未运行时会自动启动并等待最多 40 秒。
+- **导入的 token 账号只用于 API 直连签到，不能切换桌面登录态**：桌面会话文件中的 token 是应用加密信封，
+  无法由明文凭证合成；且同一账号双用会因 refresh_token 轮转互相失效。需在桌面端使用该账号时，
+  请先在应用内手动登录一次，再点「+ 添加账号」保存为快照。
 - 成长任务 CDP 通道需要 WorkBuddy 带调试端口运行（`python3 Workbuddy/desktop.py ensure`）；
   桌面端安装包未内置 playwright，CDP 类任务请在 Web 端使用（wbipc 轻量任务不受影响）。
 - 自动签到调度在服务/应用运行期间生效；如需真正无人值守可用 `launchd`/任务计划定时
