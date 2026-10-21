@@ -41,6 +41,41 @@ def _find_feature(aid: str, fid: str):
     return adapter, feature
 
 
+# 请求体模型必须定义在模块级：本文件顶部启用了 from __future__ import annotations，
+# 路由函数内的注解是字符串，FastAPI 只能从模块全局解析名字——定义在 create_app()
+# 局部作用域时解析不到，body 会被降级成 query 参数，所有 POST 一律 422。
+class SaveBody(BaseModel):
+    name: str
+    force: bool = False
+
+
+class NameBody(BaseModel):
+    name: str
+
+
+class CheckinBody(BaseModel):
+    name: str | None = None
+
+
+class ToggleBody(BaseModel):
+    enabled: bool
+
+
+class SettingsBody(BaseModel):
+    auto_enabled: bool | None = None
+    auto_resign: bool | None = None
+    auto_time: str | None = None
+    restore_after_checkin: bool | None = None
+
+
+class PayloadBody(BaseModel):
+    payload: dict = {}
+
+
+class ImportBody(BaseModel):
+    data: str = ""
+
+
 def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -49,32 +84,6 @@ def create_app() -> FastAPI:
         task.cancel()
 
     app = FastAPI(title="AccountTools", lifespan=lifespan)
-
-    # ---------- 请求模型 ----------
-    class SaveBody(BaseModel):
-        name: str
-        force: bool = False
-
-    class NameBody(BaseModel):
-        name: str
-
-    class CheckinBody(BaseModel):
-        name: str | None = None
-
-    class ToggleBody(BaseModel):
-        enabled: bool
-
-    class SettingsBody(BaseModel):
-        auto_enabled: bool | None = None
-        auto_resign: bool | None = None
-        auto_time: str | None = None
-        restore_after_checkin: bool | None = None
-
-    class PayloadBody(BaseModel):
-        payload: dict = {}
-
-    class ImportBody(BaseModel):
-        data: str = ""
 
     # ---------- 静态页 ----------
     @app.get("/")
